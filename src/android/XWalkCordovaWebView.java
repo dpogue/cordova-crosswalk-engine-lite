@@ -17,10 +17,11 @@
        under the License.
 */
 
-package org.apache.cordova.engine.crosswalk;
+package org.crosswalk.engine;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 
 import org.apache.cordova.CordovaBridge;
@@ -28,6 +29,7 @@ import org.apache.cordova.CordovaInterface;
 import org.apache.cordova.CordovaPreferences;
 import org.apache.cordova.CordovaResourceApi;
 import org.apache.cordova.CordovaWebView;
+import org.apache.cordova.ICordovaCookieManager;
 import org.apache.cordova.LOG;
 import org.apache.cordova.NativeToJsMessageQueue;
 import org.apache.cordova.PluginEntry;
@@ -68,20 +70,18 @@ public class XWalkCordovaWebView implements CordovaWebView {
     public static final String TAG = "XWalkCordovaWebView";
     public static final String CORDOVA_VERSION = "3.3.0";
 
-    ArrayList<Integer> boundKeyCodes = new ArrayList<Integer>();
+    HashSet<Integer> boundKeyCodes = new HashSet<Integer>();
 
     private PluginManager pluginManager;
     private BroadcastReceiver receiver;
     protected XWalkCordovaView webview;
+    protected XWalkCordovaCookieManager cookieManager;
 
     /** Activities and other important classes **/
     CordovaInterface cordova;
 
     // Flag to track that a loadUrl timeout occurred
     int loadUrlTimeout = 0;
-
-    // Callback for file picker dialog
-    protected ValueCallback<Uri> mUploadMessage;
 
     CordovaBridge bridge;
     
@@ -108,6 +108,8 @@ public class XWalkCordovaWebView implements CordovaWebView {
 
     public XWalkCordovaWebView(XWalkCordovaView webView) {
         this.webview = webView;
+
+        this.cookieManager = new XWalkCordovaCookieManager();
     }
 
     // Use two-phase init so that the control will work with XML layouts.
@@ -126,11 +128,15 @@ public class XWalkCordovaWebView implements CordovaWebView {
         pluginManager = new PluginManager(this, this.cordova, pluginEntries);
         resourceApi = new CordovaResourceApi(webview.getContext(), pluginManager);
         bridge = new CordovaBridge(pluginManager, new NativeToJsMessageQueue(this, cordova), this.cordova.getActivity().getPackageName());
-        pluginManager.addService("App", "org.apache.cordova.CoreAndroid");
+        pluginManager.addService("CoreAndroid", "org.apache.cordova.CoreAndroid");
         initWebViewSettings();
 
         webview.init(this);
         exposeJsInterface();
+
+        if (preferences.getBoolean("DisallowOverscroll", false)) {
+            webview.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -349,13 +355,17 @@ public class XWalkCordovaWebView implements CordovaWebView {
     }
 
     @Override
-    public void setButtonPlumbedToJs(int keyCode, boolean value) {
+    public void setButtonPlumbedToJs(int keyCode, boolean override) {
         switch (keyCode) {
             case KeyEvent.KEYCODE_VOLUME_DOWN:
             case KeyEvent.KEYCODE_VOLUME_UP:
             case KeyEvent.KEYCODE_BACK:
                 // TODO: Why are search and menu buttons handled separately?
-                boundKeyCodes.add(keyCode);
+                if (override) {
+                    boundKeyCodes.add(keyCode);
+                } else {
+                    boundKeyCodes.remove(keyCode);
+                }
                 return;
             default:
                 throw new IllegalArgumentException("Unsupported keycode: " + keyCode);
@@ -388,7 +398,7 @@ public class XWalkCordovaWebView implements CordovaWebView {
     }
 
     @Override
-    public void handleResume(boolean keepRunning, boolean activityResultKeepRunning)
+    public void handleResume(boolean keepRunning)
     {
         webview.evaluateJavascript("try{cordova.fireDocumentEvent('resume');}catch(e){console.log('exception firing resume event from native');};", null);
 
@@ -601,11 +611,8 @@ public class XWalkCordovaWebView implements CordovaWebView {
     }
 
     @Override
-    public void onFilePickerResult(Uri uri) {
-        if (null == mUploadMessage)
-            return;
-        mUploadMessage.onReceiveValue(uri);
-        mUploadMessage = null;
+    public ICordovaCookieManager getCookieManager() {
+        return cookieManager;
     }
 
     @Override
